@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SWaT FDI Detector — Live Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --blue: #2E86AB; --green: #1A7A4A; --red: #C0392B;
+    --amber: #F9A825; --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; min-height: 100vh; }
+
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .logo { font-size: 16px; font-weight: 700; color: var(--blue); }
+  .logo span { color: var(--text); }
+  #status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); display: inline-block; margin-right: 6px; }
+  #status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 1.5s infinite; }
+  #status-dot.attack { background: var(--red); box-shadow: 0 0 8px var(--red); animation: pulse 0.6s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  main { padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; max-width: 1200px; margin: 0 auto; }
+
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .card-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  .card-value { font-size: 28px; font-weight: 700; }
+  .card-value.green { color: var(--green); }
+  .card-value.red   { color: var(--red); }
+  .card-value.blue  { color: var(--blue); }
+  .card-value.amber { color: var(--amber); }
+  .card-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+  .row { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .panel-title { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  #alert-banner { display: none; background: var(--red); border-radius: 8px; padding: 12px 18px; font-weight: 700; font-size: 15px; color: #fff; align-items: center; gap: 10px; }
+  #alert-banner.show { display: flex; }
+
+  canvas { max-height: 200px; }
+
+  .sensor-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .sensor-name { width: 70px; font-size: 12px; font-family: monospace; color: var(--text); flex-shrink: 0; }
+  .bar-track { flex: 1; background: #21262d; border-radius: 4px; height: 14px; overflow: hidden; }
+  .bar-fill   { height: 100%; border-radius: 4px; background: var(--blue); transition: width 0.3s; }
+  .bar-fill.high { background: var(--red); }
+  .sensor-val { width: 60px; font-size: 11px; color: var(--muted); text-align: right; font-family: monospace; }
+
+  .log { height: 180px; overflow-y: auto; font-family: monospace; font-size: 11px; }
+  .log-entry { padding: 3px 0; border-bottom: 1px solid #21262d; display: flex; gap: 8px; }
+  .log-entry .ts  { color: var(--muted); width: 48px; flex-shrink: 0; }
+  .log-entry .lbl { width: 60px; flex-shrink: 0; }
+  .log-entry.attack .lbl { color: var(--red); font-weight: 700; }
+  .log-entry.normal .lbl { color: var(--green); }
+  .log-entry .sc  { color: var(--blue); width: 70px; flex-shrink: 0; }
+  .log-entry .sensor { color: var(--amber); }
+
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button { padding: 8px 18px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; }
+  #btn-start  { background: var(--blue); color: #fff; }
+  #btn-start:hover { opacity: 0.85; }
+  #btn-stop   { background: #21262d; color: var(--text); }
+  #btn-reset  { background: #21262d; color: var(--text); }
+  .speed-label { font-size: 12px; color: var(--muted); }
+  select { background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+
+  footer { text-align: center; padding: 20px; color: var(--muted); font-size: 12px; }
+  a { color: var(--blue); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">SWaT <span>FDI Detector</span></div>
+  <div style="display:flex;align-items:center;gap:16px">
+    <span><span id="status-dot"></span><span id="status-text" style="font-size:13px">Idle</span></span>
+    <span style="font-size:12px;color:var(--muted)">Varun Kulkarni · UT Arlington</span>
+  </div>
+</header>
+
+<main>
+  <!-- Alert banner -->
+  <div id="alert-banner">
+    🚨 ATTACK DETECTED — Check sensor attribution below
+  </div>
+
+  <!-- Metric cards -->
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">Anomaly Score</div>
+      <div class="card-value blue" id="card-score">—</div>
+      <div class="card-sub">Threshold: <span id="card-thresh">—</span></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Status</div>
+      <div class="card-value green" id="card-status">Normal</div>
+      <div class="card-sub" id="card-step">Step 0</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Attacks Detected</div>
+      <div class="card-value red" id="card-attacks">0</div>
+      <div class="card-sub" id="card-fp">False positives: 0</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Accuracy</div>
+      <div class="card-value amber" id="card-acc">—</div>
+      <div class="card-sub">Correct predictions</div>
+    </div>
+  </div>
+
+  <!-- Chart + Sensor bars -->
+  <div class="row">
+    <div class="panel">
+      <div class="panel-title">Anomaly Score Over Time</div>
+      <canvas id="scoreChart"></canvas>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Top Sensor Contributions</div>
+      <div id="sensor-bars"></div>
+    </div>
+  </div>
+
+  <!-- Controls + Log -->
+  <div class="row">
+    <div class="panel">
+      <div class="panel-title">Event Log</div>
+      <div class="log" id="log"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Controls</div>
+      <div class="controls">
+        <button id="btn-start">▶ Start Demo</button>
+        <button id="btn-stop">⏸ Pause</button>
+        <button id="btn-reset">↺ Reset</button>
+        <span class="speed-label">Speed:</span>
+        <select id="speed-sel">
+          <option value="500">0.5s</option>
+          <option value="200" selected>0.2s</option>
+          <option value="100">0.1s</option>
+          <option value="50">Fast</option>
+        </select>
+      </div>
+      <div style="margin-top:16px;font-size:12px;color:var(--muted);line-height:1.8">
+        <div>Model: LSTM Autoencoder</div>
+        <div>Window: W = 30 steps</div>
+        <div>Features: 52 sensors</div>
+        <div>Dataset: SWaT (iTrust, Singapore)</div>
+        <div style="margin-top:8px"><a href="https://github.com/YOUR_USERNAME/swat-fdi-detection" target="_blank">GitHub →</a></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>Varun Kulkarni · University of Texas at Arlington · <a href="https://github.com/YOUR_USERNAME/swat-fdi-detection">GitHub</a></footer>
+
+<script>
+// ── Config ─────────────────────────────────────────────────────────────────────
+const API = "https://YOUR-RENDER-APP.onrender.com";   // ← update after deploy
+
+// ── Chart setup ────────────────────────────────────────────────────────────────
+const MAX_POINTS = 120;
+const chartData = { labels: [], scores: [], attacks: [] };
+
+const ctx = document.getElementById("scoreChart").getContext("2d");
+const chart = new Chart(ctx, {
+  type: "line",
+  data: {
+    labels: chartData.labels,
+    datasets: [
+      {
+        label: "Anomaly Score",
+        data: chartData.scores,
+        borderColor: "#2E86AB",
+        backgroundColor: "rgba(46,134,171,0.08)",
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.3,
+      },
+      {
+        label: "Threshold",
+        data: chartData.attacks,
+        borderColor: "#C0392B",
+        borderWidth: 1,
+        borderDash: [4, 3],
+        pointRadius: 0,
+        fill: false,
+      },
+    ],
+  },
+  options: {
+    animation: false,
+    responsive: true,
+    maintainAspectRatio: true,
+    plugins: { legend: { labels: { color: "#8b949e", font: { size: 11 } } } },
+    scales: {
+      x: { ticks: { color: "#8b949e", maxTicksLimit: 8, font: { size: 10 } }, grid: { color: "#21262d" } },
+      y: { ticks: { color: "#8b949e", font: { size: 10 } }, grid: { color: "#21262d" }, min: 0 },
+    },
+  },
+});
+
+// ── State ──────────────────────────────────────────────────────────────────────
+let step = 0, timer = null;
+let attackCount = 0, fpCount = 0, correct = 0, total = 0;
+
+// ── DOM refs ───────────────────────────────────────────────────────────────────
+const dot        = document.getElementById("status-dot");
+const statusTxt  = document.getElementById("status-text");
+const cardScore  = document.getElementById("card-score");
+const cardThresh = document.getElementById("card-thresh");
+const cardStatus = document.getElementById("card-status");
+const cardStep   = document.getElementById("card-step");
+const cardAtk    = document.getElementById("card-attacks");
+const cardFP     = document.getElementById("card-fp");
+const cardAcc    = document.getElementById("card-acc");
+const logEl      = document.getElementById("log");
+const alertBanner= document.getElementById("alert-banner");
+const sensorBars = document.getElementById("sensor-bars");
+
+// ── Fetch one demo step ────────────────────────────────────────────────────────
+async function tick() {
+  let res;
+  try {
+    res = await fetch(`${API}/demo/next`);
+    if (!res.ok) throw new Error(res.status);
+  } catch(e) {
+    statusTxt.textContent = "API unreachable";
+    dot.className = "";
+    pause();
+    return;
+  }
+  const d = await res.json();
+
+  step++;
+  const isAtk    = d.is_anomaly;
+  const trueAtk  = d.true_label === 1;
+  const score    = d.anomaly_score;
+  const thresh   = d.threshold;
+
+  // Metrics
+  if (d.buffer_fill >= d.buffer_capacity) {
+    total++;
+    if ((isAtk && trueAtk) || (!isAtk && !trueAtk)) correct++;
+    if (isAtk && trueAtk)  attackCount++;
+    if (isAtk && !trueAtk) fpCount++;
+  }
+
+  // Cards
+  cardScore.textContent  = score.toFixed(5);
+  cardThresh.textContent = thresh.toFixed(5);
+  cardStatus.textContent = isAtk ? "🚨 ATTACK" : "Normal";
+  cardStatus.className   = "card-value " + (isAtk ? "red" : "green");
+  cardStep.textContent   = `Step ${step}  (buf ${d.buffer_fill}/${d.buffer_capacity})`;
+  cardAtk.textContent    = attackCount;
+  cardFP.textContent     = `False positives: ${fpCount}`;
+  cardAcc.textContent    = total > 0 ? (100 * correct / total).toFixed(1) + "%" : "—";
+
+  // Status dot
+  if (isAtk) { dot.className = "attack"; statusTxt.textContent = "Attack detected"; }
+  else        { dot.className = "live";   statusTxt.textContent = "Monitoring"; }
+
+  // Alert banner
+  if (isAtk) alertBanner.classList.add("show");
+  else        alertBanner.classList.remove("show");
+
+  // Chart
+  const label = step.toString();
+  chartData.labels.push(label);
+  chartData.scores.push(score);
+  chartData.attacks.push(thresh);
+  if (chartData.labels.length > MAX_POINTS) {
+    chartData.labels.shift(); chartData.scores.shift(); chartData.attacks.shift();
+  }
+  chart.data.labels   = chartData.labels;
+  chart.data.datasets[0].data = chartData.scores;
+  chart.data.datasets[1].data = chartData.attacks;
+  chart.update("none");
+
+  // Sensor bars
+  if (d.top_sensors && d.top_sensors.length) {
+    const maxErr = d.top_sensors[0].error || 1e-9;
+    sensorBars.innerHTML = d.top_sensors.map(s => {
+      const pct  = Math.min(100, (s.error / Math.max(maxErr, thresh)) * 100);
+      const high = s.error > thresh ? "high" : "";
+      return `<div class="sensor-bar">
+        <div class="sensor-name">${s.sensor}</div>
+        <div class="bar-track"><div class="bar-fill ${high}" style="width:${pct}%"></div></div>
+        <div class="sensor-val">${s.error.toFixed(4)}</div>
+      </div>`;
+    }).join("");
+  }
+
+  // Log
+  const entry = document.createElement("div");
+  entry.className = `log-entry ${isAtk ? "attack" : "normal"}`;
+  entry.innerHTML = `
+    <span class="ts">${step}</span>
+    <span class="lbl">${isAtk ? "ATTACK" : "normal"}</span>
+    <span class="sc">${score.toFixed(5)}</span>
+    <span class="sensor">${d.top_sensors[0] ? d.top_sensors[0].sensor : ""}</span>`;
+  logEl.prepend(entry);
+  if (logEl.children.length > 80) logEl.lastChild.remove();
+}
+
+// ── Controls ───────────────────────────────────────────────────────────────────
+function getDelay() { return parseInt(document.getElementById("speed-sel").value); }
+
+function start() {
+  if (timer) return;
+  dot.className = "live";
+  statusTxt.textContent = "Monitoring";
+  timer = setInterval(tick, getDelay());
+}
+function pause() {
+  clearInterval(timer); timer = null;
+  dot.className = "";
+  statusTxt.textContent = "Paused";
+}
+async function reset() {
+  pause();
+  await fetch(`${API}/demo/reset`, { method: "POST" });
+  step = 0; attackCount = 0; fpCount = 0; correct = 0; total = 0;
+  chartData.labels.length = 0; chartData.scores.length = 0; chartData.attacks.length = 0;
+  chart.update();
+  cardScore.textContent = "—"; cardStatus.textContent = "Normal";
+  cardStatus.className = "card-value green";
+  cardAtk.textContent = "0"; cardAcc.textContent = "—";
+  logEl.innerHTML = "";
+  sensorBars.innerHTML = "";
+  alertBanner.classList.remove("show");
+  dot.className = ""; statusTxt.textContent = "Idle";
+}
+
+document.getElementById("btn-start").onclick = start;
+document.getElementById("btn-stop").onclick  = pause;
+document.getElementById("btn-reset").onclick = reset;
+document.getElementById("speed-sel").onchange = () => {
+  if (timer) { pause(); start(); }
+};
+</script>
+</body>
+</html>
